@@ -317,6 +317,14 @@ class DataFrame(NDFrame):
                     if dtype is None:
                         # 1783
                         v = np.empty(len(index), dtype=object)
+
+                    # issue 9428
+                    elif any(dtype is str, dtype is bytes,
+                             np.issubdtype(dtype, 'S'), 
+                             np.issubdtype(dtype, 'U'))
+                        dtype = object
+                        v = np.empty(len(index), dtype=dtype)
+
                     else:
                         v = np.empty(len(index), dtype=dtype)
 
