@@ -1,5 +1,6 @@
 import nose
 
+import os
 import datetime
 import numpy as np
 import sys
@@ -11,7 +12,7 @@ from pandas import (Series, DataFrame, Panel, MultiIndex, bdate_range,
                     date_range, period_range, Index, SparseSeries, SparseDataFrame,
                     SparsePanel)
 import pandas.util.testing as tm
-from pandas.util.testing import ensure_clean
+from pandas.util.testing import ensure_clean, assert_index_equal
 from pandas.tests.test_series import assert_series_equal
 from pandas.tests.test_frame import assert_frame_equal
 from pandas.tests.test_panel import assert_panel_equal
@@ -39,6 +40,8 @@ def check_arbitrary(a, b):
         assert_frame_equal(a, b)
     elif isinstance(a, Series):
         assert_series_equal(a, b)
+    elif isinstance(a, Index):
+        assert_index_equal(a, b)
     else:
         assert(a == b)
 
@@ -92,6 +95,17 @@ class TestAPI(TestPackers):
         s = to_msgpack(None,*dfs)
         for i, result in enumerate(read_msgpack(s,iterator=True)):
             tm.assert_frame_equal(result,dfs[i])
+
+    def test_invalid_arg(self):
+        #GH10369
+        class A(object):
+            def __init__(self):
+                self.read = 0
+
+        tm.assertRaises(ValueError, read_msgpack, path_or_buf=None)
+        tm.assertRaises(ValueError, read_msgpack, path_or_buf={})
+        tm.assertRaises(ValueError, read_msgpack, path_or_buf=A())
+
 
 class TestNumpy(TestPackers):
 
@@ -385,6 +399,24 @@ class TestNDFrame(TestPackers):
         result = self.encode_decode(df)
         assert_frame_equal(result, df)
 
+    def test_dataframe_duplicate_column_names(self):
+
+        # GH 9618
+        expected_1 = DataFrame(columns=['a', 'a'])
+        expected_2 = DataFrame(columns=[1]*100)
+        expected_2.loc[0] = np.random.randn(100)
+        expected_3 = DataFrame(columns=[1, 1])
+        expected_3.loc[0] = ['abc', np.nan]
+
+        result_1 = self.encode_decode(expected_1)
+        result_2 = self.encode_decode(expected_2)
+        result_3 = self.encode_decode(expected_3)
+
+        assert_frame_equal(result_1, expected_1)
+        assert_frame_equal(result_2, expected_2)
+        assert_frame_equal(result_3, expected_3)
+
+
 class TestSparse(TestPackers):
 
     def _check_roundtrip(self, obj, comparator, **kwargs):
@@ -444,6 +476,97 @@ class TestSparse(TestPackers):
         sp3 = p.to_sparse(fill_value=0)
         self._check_roundtrip(sp3, tm.assert_panel_equal,
                               check_panel_type=True)
+
+
+class TestCompression(TestPackers):
+    """See https://github.com/pydata/pandas/pull/9783
+    """
+
+    def setUp(self):
+        super(TestCompression, self).setUp()
+        data = {
+            'A': np.arange(1000, dtype=np.float64),
+            'B': np.arange(1000, dtype=np.int32),
+            'C': list(100 * 'abcdefghij'),
+            'D': date_range(datetime.datetime(2015, 4, 1), periods=1000),
+            'E': [datetime.timedelta(days=x) for x in range(1000)],
+        }
+        self.frame = {
+            'float': DataFrame(dict((k, data[k]) for k in ['A', 'A'])),
+            'int': DataFrame(dict((k, data[k]) for k in ['B', 'B'])),
+            'mixed': DataFrame(data),
+        }
+
+    def test_plain(self):
+        i_rec = self.encode_decode(self.frame)
+        for k in self.frame.keys():
+            assert_frame_equal(self.frame[k], i_rec[k])
+
+    def test_compression_zlib(self):
+        i_rec = self.encode_decode(self.frame, compress='zlib')
+        for k in self.frame.keys():
+            assert_frame_equal(self.frame[k], i_rec[k])
+
+    def test_compression_blosc(self):
+        try:
+            import blosc
+        except ImportError:
+            raise nose.SkipTest('no blosc')
+        i_rec = self.encode_decode(self.frame, compress='blosc')
+        for k in self.frame.keys():
+            assert_frame_equal(self.frame[k], i_rec[k])
+
+
+class TestMsgpack():
+    """
+    How to add msgpack tests:
+
+    1. Install pandas version intended to output the msgpack.
+
+    2. Execute "generate_legacy_storage_files.py" to create the msgpack.
+    $ python generate_legacy_storage_files.py <output_dir> msgpack
+
+    3. Move the created pickle to "data/legacy_msgpack/<version>" directory.
+
+    NOTE: TestMsgpack can't be a subclass of tm.Testcase to use test generator.
+    http://stackoverflow.com/questions/6689537/nose-test-generators-inside-class
+    """
+    def setUp(self):
+        from pandas.io.tests.generate_legacy_storage_files import create_msgpack_data
+        self.data = create_msgpack_data()
+        self.path = u('__%s__.msgpack' % tm.rands(10))
+
+    def compare(self, vf):
+        data = read_msgpack(vf)
+        for typ, dv in data.items():
+            for dt, result in dv.items():
+                try:
+                    expected = self.data[typ][dt]
+                except KeyError:
+                    continue
+                check_arbitrary(result, expected)
+
+        return data
+
+    def read_msgpacks(self, version):
+
+        pth = tm.get_data_path('legacy_msgpack/{0}'.format(str(version)))
+        n = 0
+        for f in os.listdir(pth):
+            vf = os.path.join(pth, f)
+            self.compare(vf)
+            n += 1
+        assert n > 0, 'Msgpack files are not tested'
+
+    def test_msgpack(self):
+        msgpack_path = tm.get_data_path('legacy_msgpack')
+        n = 0
+        for v in os.listdir(msgpack_path):
+            pth = os.path.join(msgpack_path, v)
+            if os.path.isdir(pth):
+                yield self.read_msgpacks, v
+            n += 1
+        assert n > 0, 'Msgpack files are not tested'
 
 
 if __name__ == '__main__':

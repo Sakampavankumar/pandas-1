@@ -36,7 +36,7 @@ def _skip_if_python_ver(skip_major, skip_minor=None):
         raise nose.SkipTest("skipping Python version %d.%d" % (major, minor))
 
 
-json_unicode = (json.dumps if sys.version_info[0] >= 3
+json_unicode = (json.dumps if compat.PY3
                 else partial(json.dumps, encoding="utf-8"))
 
 class UltraJSONTests(TestCase):
@@ -114,6 +114,9 @@ class UltraJSONTests(TestCase):
         self.assertEqual(sut, decoded)
 
     def test_encodeDoubleTinyExponential(self):
+        if compat.is_platform_windows() and not compat.PY3:
+            raise nose.SkipTest("buggy on win-64 for py2")
+
         num = 1e-40
         self.assertEqual(num, ujson.decode(ujson.encode(num)))
         num = 1e-100

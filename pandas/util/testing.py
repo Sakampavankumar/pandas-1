@@ -24,36 +24,21 @@ import numpy as np
 from numpy.testing import assert_array_equal
 
 import pandas as pd
-from pandas.core.common import is_sequence, array_equivalent, is_list_like
-import pandas.core.index as index
-import pandas.core.series as series
-import pandas.core.frame as frame
-import pandas.core.panel as panel
-import pandas.core.panel4d as panel4d
+from pandas.core.common import (is_sequence, array_equivalent, is_list_like, is_number,
+                                is_datetimelike_v_numeric, is_datetimelike_v_object)
 import pandas.compat as compat
 from pandas.compat import(
     filter, map, zip, range, unichr, lrange, lmap, lzip, u, callable, Counter,
-    raise_with_traceback, httplib
+    raise_with_traceback, httplib, is_platform_windows
 )
 
 from pandas.computation import expressions as expr
 
-from pandas import bdate_range
-from pandas.tseries.index import DatetimeIndex
-from pandas.tseries.tdi import TimedeltaIndex
-from pandas.tseries.period import PeriodIndex
-
+from pandas import (bdate_range, CategoricalIndex, DatetimeIndex, TimedeltaIndex, PeriodIndex,
+                    Index, MultiIndex, Series, DataFrame, Panel, Panel4D)
+from pandas.util.decorators import deprecate
 from pandas import _testing
-
-
 from pandas.io.common import urlopen
-
-Index = index.Index
-MultiIndex = index.MultiIndex
-Series = series.Series
-DataFrame = frame.DataFrame
-Panel = panel.Panel
-Panel4D = panel4d.Panel4D
 
 N = 30
 K = 4
@@ -75,7 +60,6 @@ def reset_testing_mode():
 
 set_testing_mode()
 
-
 class TestCase(unittest.TestCase):
 
     @classmethod
@@ -96,6 +80,23 @@ class TestCase(unittest.TestCase):
         with ensure_clean(path) as path:
             pd.to_pickle(obj, path)
             return pd.read_pickle(path)
+
+    # https://docs.python.org/3/library/unittest.html#deprecated-aliases
+    def assertEquals(self, *args, **kwargs):
+        return deprecate('assertEquals', self.assertEqual)(*args, **kwargs)
+
+    def assertNotEquals(self, *args, **kwargs):
+        return deprecate('assertNotEquals', self.assertNotEqual)(*args, **kwargs)
+
+    def assert_(self, *args, **kwargs):
+        return deprecate('assert_', self.assertTrue)(*args, **kwargs)
+
+    def assertAlmostEquals(self, *args, **kwargs):
+        return deprecate('assertAlmostEquals', self.assertAlmostEqual)(*args, **kwargs)
+
+    def assertNotAlmostEquals(self, *args, **kwargs):
+        return deprecate('assertNotAlmostEquals', self.assertNotAlmostEqual)(*args, **kwargs)
+
 
 # NOTE: don't pass an NDFrame or index to this function - may not handle it
 # well.
@@ -222,6 +223,17 @@ def _skip_if_no_dateutil():
         raise nose.SkipTest("dateutil not installed")
 
 
+def _skip_if_windows_python_3():
+    if compat.PY3 and is_platform_windows():
+        import nose
+        raise nose.SkipTest("not used on python 3/win32")
+
+def _skip_if_windows():
+    if is_platform_windows():
+        import nose
+        raise nose.SkipTest("Running on Windows")
+
+
 def _skip_if_no_cday():
     from pandas.core.datetools import cday
     if cday is None:
@@ -313,19 +325,21 @@ def get_locales(prefix=None, normalize=True,
         # raw_locales is "\n" seperated list of locales
         # it may contain non-decodable parts, so split
         # extract what we can and then rejoin.
-        raw_locales = []
+        raw_locales = raw_locales.split(b'\n')
+        out_locales = []
         for x in raw_locales:
-            try:
-                raw_locales.append(str(x, encoding=pd.options.display.encoding))
-            except:
-                pass
+            if compat.PY3:
+                out_locales.append(str(x, encoding=pd.options.display.encoding))
+            else:
+                out_locales.append(str(x))
+
     except TypeError:
         pass
 
     if prefix is None:
-        return _valid_locales(raw_locales, normalize)
+        return _valid_locales(out_locales, normalize)
 
-    found = re.compile('%s.*' % prefix).findall('\n'.join(raw_locales))
+    found = re.compile('%s.*' % prefix).findall('\n'.join(out_locales))
     return _valid_locales(found, normalize)
 
 
@@ -508,13 +522,6 @@ def equalContents(arr1, arr2):
     return frozenset(arr1) == frozenset(arr2)
 
 
-def assert_isinstance(obj, class_type_or_tuple, msg=''):
-    """asserts that obj is an instance of class_type_or_tuple"""
-    assert isinstance(obj, class_type_or_tuple), (
-        "%sExpected object to be of type %r, found %r instead" % (
-            msg, class_type_or_tuple, type(obj)))
-
-
 def assert_equal(a, b, msg=""):
     """asserts that a equals b, like nose's assert_equal, but allows custom message to start.
     Passes a and b to format string as well. So you can use '{0}' and '{1}' to display a and b.
@@ -530,14 +537,16 @@ def assert_equal(a, b, msg=""):
     assert a == b, "%s: %r != %r" % (msg.format(a,b), a, b)
 
 
-def assert_index_equal(left, right):
-    assert_isinstance(left, Index, '[index] ')
-    assert_isinstance(right, Index, '[index] ')
-    if not left.equals(right):
+def assert_index_equal(left, right, exact=False, check_names=True):
+    assertIsInstance(left, Index, '[index] ')
+    assertIsInstance(right, Index, '[index] ')
+    if not left.equals(right) or (exact and type(left) != type(right)):
         raise AssertionError("[index] left [{0} {1}], right [{2} {3}]".format(left.dtype,
                                                                               left,
                                                                               right,
                                                                               right.dtype))
+    if check_names:
+        assert_attr_equal('names', left, right)
 
 
 def assert_attr_equal(attr, left, right):
@@ -596,6 +605,8 @@ def assertIsInstance(obj, cls, msg=''):
         "%sExpected object to be of type %r, found %r instead" % (
             msg, cls, type(obj)))
 
+def assert_isinstance(obj, class_type_or_tuple, msg=''):
+    return deprecate('assert_isinstance', assertIsInstance)(obj, class_type_or_tuple, msg=msg)
 
 def assertNotIsInstance(obj, cls, msg=''):
     """Test that obj is not an instance of cls
@@ -607,6 +618,7 @@ def assertNotIsInstance(obj, cls, msg=''):
 
 
 def assert_categorical_equal(res, exp):
+
     if not array_equivalent(res.categories, exp.categories):
         raise AssertionError(
             'categories not equivalent: {0} vs {1}.'.format(res.categories,
@@ -622,7 +634,7 @@ def assert_categorical_equal(res, exp):
         raise AssertionError("name not the same")
 
 
-def assert_numpy_array_equal(np_array, assert_equal):
+def assert_numpy_array_equal(np_array, assert_equal, err_msg=None):
     """Checks that 'np_array' is equal to 'assert_equal'
 
     Note that the expected array should not contain `np.nan`!
@@ -634,11 +646,12 @@ def assert_numpy_array_equal(np_array, assert_equal):
     """
     if np.array_equal(np_array, assert_equal):
         return
-    raise AssertionError(
-        '{0} is not equal to {1}.'.format(np_array, assert_equal))
+    if err_msg is None:
+        err_msg = '{0} is not equal to {1}.'.format(np_array, assert_equal)
+    raise AssertionError(err_msg)
 
 
-def assert_numpy_array_equivalent(np_array, assert_equal, strict_nan=False):
+def assert_numpy_array_equivalent(np_array, assert_equal, strict_nan=False, err_msg=None):
     """Checks that 'np_array' is equivalent to 'assert_equal'
 
     Two numpy arrays are equivalent if the arrays have equal non-NaN elements,
@@ -652,8 +665,9 @@ def assert_numpy_array_equivalent(np_array, assert_equal, strict_nan=False):
     """
     if array_equivalent(np_array, assert_equal, strict_nan=strict_nan):
         return
-    raise AssertionError(
-        '{0} is not equivalent to {1}.'.format(np_array, assert_equal))
+    if err_msg is None:
+        err_msg = '{0} is not equivalent to {1}.'.format(np_array, assert_equal)
+    raise AssertionError(err_msg)
 
 
 # This could be refactored to use the NDFrame.equals method
@@ -661,29 +675,52 @@ def assert_series_equal(left, right, check_dtype=True,
                         check_index_type=False,
                         check_series_type=False,
                         check_less_precise=False,
-                        check_exact=False):
+                        check_exact=False,
+                        check_names=True,
+                        check_datetimelike_compat=False):
     if check_series_type:
-        assert_isinstance(left, type(right))
+        assertIsInstance(left, type(right))
     if check_dtype:
         assert_attr_equal('dtype', left, right)
     if check_exact:
         if not np.array_equal(left.values, right.values):
             raise AssertionError('{0} is not equal to {1}.'.format(left.values,
                                                                    right.values))
+    elif check_datetimelike_compat:
+        # we want to check only if we have compat dtypes
+        # e.g. integer and M|m are NOT compat, but we can simply check the values in that case
+        if is_datetimelike_v_numeric(left, right) or is_datetimelike_v_object(left, right):
+
+            # datetimelike may have different objects (e.g. datetime.datetime vs Timestamp) but will compare equal
+            if not Index(left.values).equals(Index(right.values)):
+                raise AssertionError(
+                    '[datetimelike_compat=True] {0} is not equal to {1}.'.format(left.values,
+                                                                                 right.values))
+        else:
+            assert_numpy_array_equivalent(left.values, right.values)
     else:
         assert_almost_equal(left.values, right.values, check_less_precise)
     if check_less_precise:
         assert_almost_equal(
             left.index.values, right.index.values, check_less_precise)
     else:
-        assert_index_equal(left.index, right.index)
+        assert_index_equal(left.index, right.index, check_names=check_names)
     if check_index_type:
         for level in range(left.index.nlevels):
             lindex = left.index.get_level_values(level)
             rindex = right.index.get_level_values(level)
-            assert_isinstance(lindex, type(rindex))
+            assertIsInstance(lindex, type(rindex))
             assert_attr_equal('dtype', lindex, rindex)
             assert_attr_equal('inferred_type', lindex, rindex)
+    if check_names:
+        if is_number(left.name) and np.isnan(left.name):
+            # Series.name can be np.nan in some test cases
+            assert is_number(right.name) and np.isnan(right.name)
+        elif left.name is pd.NaT:
+            assert right.name is pd.NaT
+        else:
+            assert_attr_equal('name', left, right)
+
 
 # This could be refactored to use the NDFrame.equals method
 def assert_frame_equal(left, right, check_dtype=True,
@@ -693,11 +730,12 @@ def assert_frame_equal(left, right, check_dtype=True,
                        check_less_precise=False,
                        check_names=True,
                        by_blocks=False,
-                       check_exact=False):
+                       check_exact=False,
+                       check_datetimelike_compat=False):
     if check_frame_type:
-        assert_isinstance(left, type(right))
-    assert_isinstance(left, DataFrame)
-    assert_isinstance(right, DataFrame)
+        assertIsInstance(left, type(right))
+    assertIsInstance(left, DataFrame)
+    assertIsInstance(right, DataFrame)
 
     if check_less_precise:
         if not by_blocks:
@@ -705,8 +743,7 @@ def assert_frame_equal(left, right, check_dtype=True,
         assert_almost_equal(left.index, right.index)
     else:
         if not by_blocks:
-            assert_index_equal(left.columns, right.columns)
-        assert_index_equal(left.index, right.index)
+            assert_index_equal(left.columns, right.columns, check_names=check_names)
 
     # compare by blocks
     if by_blocks:
@@ -715,7 +752,7 @@ def assert_frame_equal(left, right, check_dtype=True,
         for dtype in list(set(list(lblocks.keys()) + list(rblocks.keys()))):
             assert dtype in lblocks
             assert dtype in rblocks
-            assert_frame_equal(lblocks[dtype],rblocks[dtype],check_dtype=check_dtype)
+            assert_frame_equal(lblocks[dtype],rblocks[dtype], check_dtype=check_dtype)
 
     # compare by columns
     else:
@@ -727,17 +764,19 @@ def assert_frame_equal(left, right, check_dtype=True,
                                 check_dtype=check_dtype,
                                 check_index_type=check_index_type,
                                 check_less_precise=check_less_precise,
-                                check_exact=check_exact)
+                                check_exact=check_exact,
+                                check_names=check_names,
+                                check_datetimelike_compat=check_datetimelike_compat)
 
     if check_index_type:
         for level in range(left.index.nlevels):
             lindex = left.index.get_level_values(level)
             rindex = right.index.get_level_values(level)
-            assert_isinstance(lindex, type(rindex))
+            assertIsInstance(lindex, type(rindex))
             assert_attr_equal('dtype', lindex, rindex)
             assert_attr_equal('inferred_type', lindex, rindex)
     if check_column_type:
-        assert_isinstance(left.columns, type(right.columns))
+        assertIsInstance(left.columns, type(right.columns))
         assert_attr_equal('dtype', left.columns, right.columns)
         assert_attr_equal('inferred_type', left.columns, right.columns)
     if check_names:
@@ -748,14 +787,15 @@ def assert_frame_equal(left, right, check_dtype=True,
 def assert_panelnd_equal(left, right,
                          check_panel_type=False,
                          check_less_precise=False,
-                         assert_func=assert_frame_equal):
+                         assert_func=assert_frame_equal,
+                         check_names=False):
     if check_panel_type:
-        assert_isinstance(left, type(right))
+        assertIsInstance(left, type(right))
 
     for axis in ['items', 'major_axis', 'minor_axis']:
         left_ind = getattr(left, axis)
         right_ind = getattr(right, axis)
-        assert_index_equal(left_ind, right_ind)
+        assert_index_equal(left_ind, right_ind, check_names=check_names)
 
     for i, item in enumerate(left._get_axis(0)):
         assert item in right, "non-matching item (right) '%s'" % item
@@ -800,57 +840,89 @@ def getArangeMat():
 
 
 # make index
-def makeStringIndex(k=10):
-    return Index(rands_array(nchars=10, size=k))
+def makeStringIndex(k=10, name=None):
+    return Index(rands_array(nchars=10, size=k), name=name)
 
 
-def makeUnicodeIndex(k=10):
+def makeUnicodeIndex(k=10, name=None):
     return Index(randu_array(nchars=10, size=k))
 
-def makeBoolIndex(k=10):
+def makeCategoricalIndex(k=10, n=3, name=None):
+    """ make a length k index or n categories """
+    x = rands_array(nchars=4, size=n)
+    return CategoricalIndex(np.random.choice(x,k), name=name)
+
+def makeBoolIndex(k=10, name=None):
     if k == 1:
-        return Index([True])
+        return Index([True], name=name)
     elif k == 2:
-        return Index([False,True])
-    return Index([False,True] + [False]*(k-2))
+        return Index([False,True], name=name)
+    return Index([False,True] + [False]*(k-2), name=name)
 
-def makeIntIndex(k=10):
-    return Index(lrange(k))
+def makeIntIndex(k=10, name=None):
+    return Index(lrange(k), name=name)
 
-def makeFloatIndex(k=10):
+def makeFloatIndex(k=10, name=None):
     values = sorted(np.random.random_sample(k)) - np.random.random_sample(1)
-    return Index(values * (10 ** np.random.randint(0, 9)))
+    return Index(values * (10 ** np.random.randint(0, 9)), name=name)
 
-def makeDateIndex(k=10, freq='B'):
+def makeDateIndex(k=10, freq='B', name=None):
     dt = datetime(2000, 1, 1)
-    dr = bdate_range(dt, periods=k, freq=freq)
-    return DatetimeIndex(dr)
+    dr = bdate_range(dt, periods=k, freq=freq, name=name)
+    return DatetimeIndex(dr, name=name)
 
-def makeTimedeltaIndex(k=10, freq='D'):
-    return TimedeltaIndex(start='1 day',periods=k,freq=freq)
+def makeTimedeltaIndex(k=10, freq='D', name=None):
+    return TimedeltaIndex(start='1 day', periods=k, freq=freq, name=name)
 
-def makePeriodIndex(k=10):
+def makePeriodIndex(k=10, name=None):
     dt = datetime(2000, 1, 1)
-    dr = PeriodIndex(start=dt, periods=k, freq='B')
+    dr = PeriodIndex(start=dt, periods=k, freq='B', name=name)
     return dr
+
+def all_index_generator(k=10):
+    """Generator which can be iterated over to get instances of all the various
+    index classes.
+
+    Parameters
+    ----------
+    k: length of each of the index instances
+    """
+    all_make_index_funcs = [makeIntIndex, makeFloatIndex, makeStringIndex,
+                            makeUnicodeIndex, makeDateIndex, makePeriodIndex,
+                            makeTimedeltaIndex, makeBoolIndex,
+                            makeCategoricalIndex]
+    for make_index_func in all_make_index_funcs:
+        yield make_index_func(k=k)
+
+def all_timeseries_index_generator(k=10):
+    """Generator which can be iterated over to get instances of all the classes
+    which represent time-seires.
+
+    Parameters
+    ----------
+    k: length of each of the index instances
+    """
+    make_index_funcs = [makeDateIndex, makePeriodIndex, makeTimedeltaIndex]
+    for make_index_func in make_index_funcs:
+        yield make_index_func(k=k)
 
 
 # make series
-def makeFloatSeries():
+def makeFloatSeries(name=None):
     index = makeStringIndex(N)
-    return Series(randn(N), index=index)
+    return Series(randn(N), index=index, name=name)
 
 
-def makeStringSeries():
+def makeStringSeries(name=None):
     index = makeStringIndex(N)
-    return Series(randn(N), index=index)
+    return Series(randn(N), index=index, name=name)
 
 
-def makeObjectSeries():
+def makeObjectSeries(name=None):
     dateIndex = makeDateIndex(N)
     dateIndex = Index(dateIndex, dtype=object)
     index = makeStringIndex(N)
-    return Series(dateIndex, index=index)
+    return Series(dateIndex, index=index, name=name)
 
 
 def getSeriesData():
@@ -858,16 +930,16 @@ def getSeriesData():
     return dict((c, Series(randn(N), index=index)) for c in getCols(K))
 
 
-def makeTimeSeries(nper=None, freq='B'):
+def makeTimeSeries(nper=None, freq='B', name=None):
     if nper is None:
         nper = N
-    return Series(randn(nper), index=makeDateIndex(nper, freq=freq))
+    return Series(randn(nper), index=makeDateIndex(nper, freq=freq), name=name)
 
 
-def makePeriodSeries(nper=None):
+def makePeriodSeries(nper=None, name=None):
     if nper is None:
         nper = N
-    return Series(randn(nper), index=makePeriodIndex(nper))
+    return Series(randn(nper), index=makePeriodIndex(nper), name=name)
 
 
 def getTimeSeriesData(nper=None, freq='B'):
@@ -1613,7 +1685,7 @@ class _AssertRaisesContextmanager(object):
     def __init__(self, exception, regexp=None, *args, **kwargs):
         self.exception = exception
         if regexp is not None and not hasattr(regexp, "search"):
-            regexp = re.compile(regexp)
+            regexp = re.compile(regexp, re.DOTALL)
         self.regexp = regexp
 
     def __enter__(self):
@@ -1768,3 +1840,44 @@ def use_numexpr(use, min_elements=expr._MIN_ELEMENTS):
 for name, obj in inspect.getmembers(sys.modules[__name__]):
     if inspect.isfunction(obj) and name.startswith('assert'):
         setattr(TestCase, name, staticmethod(obj))
+
+def test_parallel(num_threads=2):
+    """Decorator to run the same function multiple times in parallel.
+
+    Parameters
+    ----------
+    num_threads : int, optional
+        The number of times the function is run in parallel.
+
+    Notes
+    -----
+    This decorator does not pass the return value of the decorated function.
+
+    Original from scikit-image: https://github.com/scikit-image/scikit-image/pull/1519
+
+    """
+
+    assert num_threads > 0
+    import threading
+
+    def wrapper(func):
+        @wraps(func)
+        def inner(*args, **kwargs):
+            threads = []
+            for i in range(num_threads):
+                thread = threading.Thread(target=func, args=args, kwargs=kwargs)
+                threads.append(thread)
+            for thread in threads:
+                thread.start()
+            for thread in threads:
+                thread.join()
+        return inner
+    return wrapper
+
+
+class SubclassedDataFrame(DataFrame):
+    _metadata = ['testattr']
+
+    @property
+    def _constructor(self):
+        return SubclassedDataFrame

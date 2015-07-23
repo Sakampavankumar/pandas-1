@@ -68,15 +68,15 @@ def create_block(typestr, placement, item_shape=None, num_offset=0):
     elif typestr in ('object', 'string', 'O'):
         values = np.reshape(['A%d' % i for i in mat.ravel() + num_offset],
                             shape)
-    elif typestr in ('bool'):
+    elif typestr in ('b','bool',):
         values = np.ones(shape, dtype=np.bool_)
     elif typestr in ('datetime', 'dt', 'M8[ns]'):
         values = (mat * 1e9).astype('M8[ns]')
     elif typestr in ('timedelta', 'td', 'm8[ns]'):
         values = (mat * 1).astype('m8[ns]')
-    elif typestr in ('category'):
+    elif typestr in ('category',):
         values = Categorical([1,1,2,2,3,3,3,3,4,4])
-    elif typestr in ('category2'):
+    elif typestr in ('category2',):
         values = Categorical(['a','a','a','a','b','b','c','c','c','d'])
     elif typestr in ('sparse', 'sparse_na'):
         # FIXME: doesn't support num_rows != 10
@@ -554,7 +554,7 @@ class TestBlockManager(tm.TestCase):
         mgr.set('a', np.array(['1'] * N, dtype=np.object_))
         mgr.set('b', np.array(['2.'] * N, dtype=np.object_))
         mgr.set('foo', np.array(['foo.'] * N, dtype=np.object_))
-        new_mgr = mgr.convert(convert_numeric=True)
+        new_mgr = mgr.convert(numeric=True)
         self.assertEqual(new_mgr.get('a').dtype, np.int64)
         self.assertEqual(new_mgr.get('b').dtype, np.float64)
         self.assertEqual(new_mgr.get('foo').dtype, np.object_)
@@ -566,7 +566,7 @@ class TestBlockManager(tm.TestCase):
         mgr.set('a', np.array(['1'] * N, dtype=np.object_))
         mgr.set('b', np.array(['2.'] * N, dtype=np.object_))
         mgr.set('foo', np.array(['foo.'] * N, dtype=np.object_))
-        new_mgr = mgr.convert(convert_numeric=True)
+        new_mgr = mgr.convert(numeric=True)
         self.assertEqual(new_mgr.get('a').dtype, np.int64)
         self.assertEqual(new_mgr.get('b').dtype, np.float64)
         self.assertEqual(new_mgr.get('foo').dtype, np.object_)
@@ -751,6 +751,25 @@ class TestBlockManager(tm.TestCase):
         bm2 = BlockManager(bm1.blocks[::-1], bm1.axes)
         self.assertTrue(bm1.equals(bm2))
 
+    def test_equals_block_order_different_dtypes(self):
+        # GH 9330
+
+        mgr_strings = [
+            "a:i8;b:f8", # basic case
+            "a:i8;b:f8;c:c8;d:b", # many types
+            "a:i8;e:dt;f:td;g:string", # more types
+            "a:i8;b:category;c:category2;d:category2", # categories
+            "c:sparse;d:sparse_na;b:f8", # sparse
+            ]
+
+        for mgr_string in mgr_strings:
+            bm = create_mgr(mgr_string)
+            block_perms = itertools.permutations(bm.blocks)
+            for bm_perm in block_perms:
+                bm_this = BlockManager(bm_perm, bm.axes)
+                self.assertTrue(bm.equals(bm_this))
+                self.assertTrue(bm_this.equals(bm))
+
     def test_single_mgr_ctor(self):
         mgr = create_single_mgr('f8', num_rows=5)
         self.assertEqual(mgr.as_matrix().tolist(), [0., 1., 2., 3., 4.])
@@ -793,6 +812,13 @@ class TestIndexing(object):
         def assert_slice_ok(mgr, axis, slobj):
             # import pudb; pudb.set_trace()
             mat = mgr.as_matrix()
+
+            # we maybe using an ndarray to test slicing and
+            # might not be the full length of the axis
+            if isinstance(slobj, np.ndarray):
+                ax = mgr.axes[axis]
+                if len(ax) and len(slobj) and len(slobj) != len(ax):
+                    slobj = np.concatenate([slobj, np.zeros(len(ax)-len(slobj),dtype=bool)])
             sliced = mgr.get_slice(slobj, axis=axis)
             mat_slobj = (slice(None),) * axis + (slobj,)
             assert_almost_equal(mat[mat_slobj], sliced.as_matrix())
